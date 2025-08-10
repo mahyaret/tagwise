@@ -1,0 +1,68 @@
+# CMake build folders
+/build/
+/model/
+/out/
+/bin/
+/lib/
+/Debug/
+/Release/
+/x64/
+/x86/
+
+# Visual Studio
+.vs/
+*.vcxproj*
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# OS-specific
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Temporary files
+*.obj
+*.o
+*.pdb
+*.idb
+*.log
+*.tlog
+*.tmp
+*.cache
+*.pch
+
+# Executables & libs
+*.exe
+*.dll
+*.lib
+*.so
+*.dylib
+*.a
+
+# vcpkg build artifacts (but NOT the vcpkg folder itself if you want to keep manifests)
+vcpkg_installed/
+installed/
+packages/
+
+# Generated model/data files
+*.onnx
+*.bin
+*.npy
+*.npz
+*.txt
+*.jpg
+*.png
+
+# Ignore Python venv if used for tokenization scripts
+venv/
+.env/
+__pycache__/
+*.pyc
