@@ -17,6 +17,19 @@ cmake -B build -S . -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
+## Build on macOS
+
+Prerequisites (Homebrew):
+```
+brew install cmake opencv onnxruntime nlohmann-json
+```
+
+Build:
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
 ## How to run
 ```
 .\tagwise.exe "[path_to_images_folder]" "[path_to_tags.txt]" "[path_to_model]"
@@ -30,6 +43,17 @@ If your model folder contains `tags.txt`, you can also run:
 If you see noisy ONNX schema registration logs on startup, `TAGWISE_VERBOSE_INIT=1` disables Tagwise's stderr silencing during ONNXRuntime initialization.
 
 If your image model has dynamic input size, Tagwise defaults to `224x224`; override with `TAGWISE_IMAGE_SIZE=224` or `TAGWISE_IMAGE_SIZE=336x336`.
+
+### Run on macOS
+
+```
+./build/bin/tagwise "[path_to_images_folder]" "[path_to_tags.txt]" "[path_to_model]"
+```
+
+Shorthand (uses `[path_to_model]/tags.txt`):
+```
+./build/bin/tagwise "[path_to_images_folder]" "[path_to_model]"
+```
 
 
 ## Demo
