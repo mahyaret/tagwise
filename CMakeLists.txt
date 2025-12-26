@@ -4,21 +4,23 @@ project(tagwise LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ---- Point CMake at your vcpkg installed prefix (explicit paths) ----
-# Change this one line if your vcpkg lives elsewhere:
-set(VCPKG_INSTALLED_DIR "C:/Users/home/source/repos/vcpkg/installed/x64-windows")
+# ---- Windows (vcpkg) paths ----
+if(WIN32)
+    # Change this one line if your vcpkg lives elsewhere:
+    set(VCPKG_INSTALLED_DIR "C:/Users/home/source/repos/vcpkg/installed/x64-windows")
 
-# Help CMake find package configs (OpenCV, nlohmann_json, possibly onnxruntime)
-list(APPEND CMAKE_PREFIX_PATH
-    "${VCPKG_INSTALLED_DIR}"
-    "${VCPKG_INSTALLED_DIR}/share/opencv4"
-    "${VCPKG_INSTALLED_DIR}/share/nlohmann_json"
-    "${VCPKG_INSTALLED_DIR}/share/onnxruntime"
-    "${VCPKG_INSTALLED_DIR}/share/onnxruntime-gpu"
-)
+    # Help CMake find package configs (OpenCV, nlohmann_json, possibly onnxruntime)
+    list(APPEND CMAKE_PREFIX_PATH
+        "${VCPKG_INSTALLED_DIR}"
+        "${VCPKG_INSTALLED_DIR}/share/opencv4"
+        "${VCPKG_INSTALLED_DIR}/share/nlohmann_json"
+        "${VCPKG_INSTALLED_DIR}/share/onnxruntime"
+        "${VCPKG_INSTALLED_DIR}/share/onnxruntime-gpu"
+    )
 
-# Also expose the lib dir explicitly (as requested)
-link_directories("${VCPKG_INSTALLED_DIR}/lib")
+    # Also expose the lib dir explicitly (as requested)
+    link_directories("${VCPKG_INSTALLED_DIR}/lib")
+endif()
 
 # ---- Sources ----
 file(GLOB SRC_FILES
@@ -28,7 +30,7 @@ file(GLOB SRC_FILES
 add_executable(tagwise ${SRC_FILES})
 
 # ---- Dependencies from vcpkg prefix ----
-find_package(OpenCV CONFIG REQUIRED)
+find_package(OpenCV CONFIG REQUIRED COMPONENTS core imgproc imgcodecs)
 find_package(nlohmann_json CONFIG REQUIRED)
 
 # ONNX Runtime is OPTIONAL here. If found, we link and define a flag for your code.
@@ -37,8 +39,8 @@ find_package(onnxruntime CONFIG QUIET)
 # Includes (fixes opencv2-under-opencv4 layout)
 target_include_directories(tagwise PRIVATE
     ${OpenCV_INCLUDE_DIRS}
-    "${VCPKG_INSTALLED_DIR}/include"            # general headers from vcpkg
-    "${VCPKG_INSTALLED_DIR}/include/opencv4"    # just in case
+    $<$<BOOL:${WIN32}>:"${VCPKG_INSTALLED_DIR}/include">            # general headers from vcpkg
+    $<$<BOOL:${WIN32}>:"${VCPKG_INSTALLED_DIR}/include/opencv4">    # just in case
 )
 
 # Link

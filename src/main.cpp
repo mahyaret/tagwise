@@ -24,6 +24,15 @@
 #include <cctype>
 #include <filesystem>
 #include <chrono>
+#include <optional>
+
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#else
+#include <unistd.h>
+#include <fcntl.h>
+#endif
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -47,6 +56,17 @@ static const size_t TOPK_PICK = 3;                  // rename uses top-3
 
 // ---------- Small helpers ----------
 struct Emb { std::vector<float> v; };
+
+static size_t checked_count_for_hw(int H, int W) {
+    if (H <= 0 || W <= 0) throw std::runtime_error("Invalid image size (H/W must be positive).");
+    // Guardrail: avoid accidental gigantic allocations from bad shapes.
+    if (H > 8192 || W > 8192) throw std::runtime_error("Unreasonable image size from model (set TAGWISE_IMAGE_SIZE=HxW).");
+    const size_t h = (size_t)H, w = (size_t)W;
+    if (h > (SIZE_MAX / w)) throw std::runtime_error("Image size overflow.");
+    const size_t hw = h * w;
+    if (hw > (SIZE_MAX / 3)) throw std::runtime_error("Image size overflow.");
+    return 3 * hw;
+}
 
 static float cosine(const Emb& a, const Emb& b) {
     const size_t n = (std::min)(a.v.size(), b.v.size());
@@ -79,10 +99,37 @@ static IoNames get_output_names(Ort::Session& s, Ort::AllocatorWithDefaultOption
 }
 
 static std::pair<int, int> get_hw_from_model(Ort::Session& s) {
-    auto info = s.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
+    Ort::TypeInfo type_info = s.GetInputTypeInfo(0);
+    auto info = type_info.GetTensorTypeAndShapeInfo();
     auto shape = info.GetShape(); // [1,3,H,W]
     if (shape.size() != 4) throw std::runtime_error("Unexpected image input rank (expected NCHW).");
-    return { int(shape[2]), int(shape[3]) };
+    int H = int(shape[2]);
+    int W = int(shape[3]);
+
+    // Some exported models keep dynamic spatial dims (-1). Default to 224x224 unless overridden.
+    if (H <= 0 || W <= 0) {
+        H = 224; W = 224;
+        if (const char* v = std::getenv("TAGWISE_IMAGE_SIZE"); v && *v) {
+            const std::string s = v;
+            const auto x = s.find('x');
+            try {
+                if (x == std::string::npos) {
+                    const int n = std::stoi(s);
+                    if (n > 0) { H = n; W = n; }
+                }
+                else {
+                    const int h = std::stoi(s.substr(0, x));
+                    const int w = std::stoi(s.substr(x + 1));
+                    if (h > 0 && w > 0) { H = h; W = w; }
+                }
+            }
+            catch (...) {
+                // ignore invalid override
+            }
+        }
+    }
+
+    return { H, W };
 }
 
 // CLIP preprocess with dynamic H,W
@@ -116,7 +163,7 @@ static Emb run_clip_image(Ort::Session& sess, const cv::Mat& bgr) {
     cv::Mat chw = preprocess_clip(bgr, H, W);
 
     std::vector<int64_t> shape = { 1,3,H,W };
-    std::vector<float> data(size_t(3) * H * W);
+    std::vector<float> data(checked_count_for_hw(H, W));
     std::memcpy(data.data(), chw.ptr<float>(0), data.size() * sizeof(float));
 
     Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
@@ -131,9 +178,14 @@ static Emb run_clip_image(Ort::Session& sess, const cv::Mat& bgr) {
     float* p = out.GetTensorMutableData<float>();
     auto info = out.GetTensorTypeAndShapeInfo();
     auto shp = info.GetShape();
-    size_t dim = 1; for (auto d : shp) dim *= size_t(d);
 
-    Emb e; e.v.assign(p, p + dim);
+    int64_t dim = -1;
+    if (shp.size() == 1) dim = shp[0];
+    else if (shp.size() == 2) dim = shp[1];
+    if (dim <= 0) dim = 512; // typical CLIP embedding dim
+    if (dim <= 0 || dim > 4096) throw std::runtime_error("Unexpected image embedding dimension.");
+
+    Emb e; e.v.assign(p, p + (size_t)dim);
     double n = 0; for (float v : e.v) n += double(v) * v; n = std::sqrt(n) + 1e-12;
     for (auto& v : e.v) v = float(v / n);
     return e;
@@ -253,7 +305,8 @@ static Emb run_clip_text_string(Ort::Session& sess, const std::string& prompt) {
     auto in_names = get_input_names(sess, alloc);
     auto out_names = get_output_names(sess, alloc);
 
-    auto ti = sess.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
+    Ort::TypeInfo type_info = sess.GetInputTypeInfo(0);
+    auto ti = type_info.GetTensorTypeAndShapeInfo();
     if (ti.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING)
         throw std::runtime_error("Text model is not STRING-input.");
 
@@ -275,10 +328,16 @@ static Emb run_clip_text_string(Ort::Session& sess, const std::string& prompt) {
 
     Emb e;
     if (shp.size() == 2) {
-        size_t dim = size_t(shp[1]); e.v.assign(p, p + dim);
+        int64_t dim = shp[1];
+        if (dim <= 0) dim = 512;
+        if (dim <= 0 || dim > 4096) throw std::runtime_error("Unexpected text embedding dimension.");
+        e.v.assign(p, p + (size_t)dim);
     }
     else if (shp.size() == 3) {
         int64_t seq = shp[1], dim = shp[2];
+        if (dim <= 0) dim = 512;
+        if (seq <= 0) throw std::runtime_error("Text output has dynamic sequence length; cannot pool.");
+        if (dim <= 0 || dim > 4096) throw std::runtime_error("Unexpected text embedding dimension.");
         e.v.assign(size_t(dim), 0.f);
         for (int64_t t = 0; t < seq; ++t) {
             const float* row = p + t * dim;
@@ -325,10 +384,16 @@ static Emb run_clip_text_ids(Ort::Session& sess,
 
     Emb e;
     if (shp.size() == 2) {
-        size_t dim = size_t(shp[1]); e.v.assign(p, p + dim);
+        int64_t dim = shp[1];
+        if (dim <= 0) dim = 512;
+        if (dim <= 0 || dim > 4096) throw std::runtime_error("Unexpected text embedding dimension.");
+        e.v.assign(p, p + (size_t)dim);
     }
     else if (shp.size() == 3) {
         int64_t seq = shp[1], dim = shp[2];
+        if (dim <= 0) dim = 512;
+        if (seq <= 0) throw std::runtime_error("Text output has dynamic sequence length; cannot pool.");
+        if (dim <= 0 || dim > 4096) throw std::runtime_error("Unexpected text embedding dimension.");
         e.v.assign(size_t(dim), 0.f);
         for (int64_t t = 0; t < seq; ++t) {
             const float* row = p + t * dim;
@@ -400,29 +465,96 @@ static std::string last_modified_YmdHMS(const fs::path& p) {
     return oss.str();
 }
 
+// ---------- Stderr silencer (to hide noisy third-party initialization logs) ----------
+struct StderrSilencer {
+#ifdef _WIN32
+    int old_fd = -1;
+    StderrSilencer() {
+        std::fflush(stderr);
+        old_fd = _dup(_fileno(stderr));
+        const int null_fd = _open("NUL", _O_WRONLY);
+        if (null_fd >= 0) {
+            _dup2(null_fd, _fileno(stderr));
+            _close(null_fd);
+        }
+    }
+    ~StderrSilencer() {
+        if (old_fd >= 0) {
+            std::fflush(stderr);
+            _dup2(old_fd, _fileno(stderr));
+            _close(old_fd);
+        }
+    }
+#else
+    int old_fd = -1;
+    StderrSilencer() {
+        std::fflush(stderr);
+        old_fd = dup(fileno(stderr));
+        const int null_fd = open("/dev/null", O_WRONLY);
+        if (null_fd >= 0) {
+            dup2(null_fd, fileno(stderr));
+            close(null_fd);
+        }
+    }
+    ~StderrSilencer() {
+        if (old_fd >= 0) {
+            std::fflush(stderr);
+            dup2(old_fd, fileno(stderr));
+            close(old_fd);
+        }
+    }
+#endif
+};
+
 int main(int argc, char** argv) {
     cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_ERROR);
     try {
+        const auto print_usage = [&]() {
+            std::fprintf(stderr,
+                "Usage:\n"
+                "  %s <folder> <tags.txt> [model_dir]\n"
+                "  %s <folder> <model_dir>          (uses <model_dir>/tags.txt)\n",
+                argv[0], argv[0]);
+        };
+
+        if (argc == 2) {
+            const std::string a1 = argv[1];
+            if (a1 == "-h" || a1 == "--help") {
+                print_usage();
+                return 0;
+            }
+        }
+
         if (argc < 3 || argc > 4) {
-            std::fprintf(stderr, "Usage: %s <folder> <tags.txt> [model_dir]\n", argv[0]);
+            print_usage();
             return 1;
         }
-        fs::path folder = fs::path(argv[1]);
-        std::string tags_path = argv[2];
 
-        // Determine model dir: argument or executable dir
+        fs::path folder = fs::path(argv[1]);
+
+        fs::path tags_path;
         fs::path model_dir;
-        if (argc == 4) {
-            model_dir = fs::path(argv[3]);
+        const fs::path arg2 = fs::path(argv[2]);
+
+        if (argc == 3) {
+            if (fs::exists(arg2) && fs::is_directory(arg2)) {
+                model_dir = arg2;
+                tags_path = model_dir / "tags.txt";
+            }
+            else {
+                tags_path = arg2;
+                // Determine model dir: executable dir (or cwd on non-Windows)
+#ifdef _WIN32
+                wchar_t buf[MAX_PATH]; GetModuleFileNameW(NULL, buf, MAX_PATH);
+                model_dir = fs::path(buf).parent_path();
+#else
+                model_dir = fs::current_path();
+#endif
+            }
         }
         else {
-            // exe directory
-#ifdef _WIN32
-            wchar_t buf[MAX_PATH]; GetModuleFileNameW(NULL, buf, MAX_PATH);
-            model_dir = fs::path(buf).parent_path();
-#else
-            model_dir = fs::current_path();
-#endif
+            tags_path = arg2;
+            model_dir = fs::path(argv[3]);
         }
 
         if (!fs::exists(folder) || !fs::is_directory(folder)) {
@@ -430,8 +562,27 @@ int main(int argc, char** argv) {
             return 2;
         }
 
-        auto tags = load_tags(tags_path);
-        if (tags.empty()) { std::fprintf(stderr, "No tags in %s\n", tags_path.c_str()); return 3; }
+        if (!fs::exists(tags_path)) {
+            std::fprintf(stderr, "Tags file not found: %s\n", tags_path.string().c_str());
+            return 3;
+        }
+        if (!fs::is_regular_file(tags_path)) {
+            std::fprintf(stderr, "Tags path is not a file: %s\n", tags_path.string().c_str());
+            return 3;
+        }
+
+        auto tags = load_tags(tags_path.string());
+        if (tags.empty()) {
+            std::fprintf(stderr, "No tags found in %s\n", tags_path.string().c_str());
+            return 3;
+        }
+
+        // Some packaged ONNX/ONNXRuntime builds can emit very noisy schema-registration logs to stderr.
+        // Default to silencing stderr just during ORT init; set TAGWISE_VERBOSE_INIT=1 to disable.
+        std::optional<StderrSilencer> init_silencer;
+        if (const char* v = std::getenv("TAGWISE_VERBOSE_INIT"); !(v && *v)) {
+            init_silencer.emplace();
+        }
 
         // ORT env + sessions
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "tagwise");
@@ -450,10 +601,12 @@ int main(int argc, char** argv) {
         Ort::Session img_sess(env, img_model.string().c_str(), so);
         Ort::Session txt_sess(env, txt_model.string().c_str(), so);
 #endif
+        init_silencer.reset();
 
         // Decide STRING vs INT64 for text model
-        auto ti0 = txt_sess.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
-        bool text_is_string = (ti0.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING);
+        Ort::TypeInfo txt_in0 = txt_sess.GetInputTypeInfo(0);
+        auto txt_in0_info = txt_in0.GetTensorTypeAndShapeInfo();
+        bool text_is_string = (txt_in0_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_STRING);
 
         // If INT64, load tokenizer files
         ClipBPETokenizer tok;

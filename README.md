@@ -22,6 +22,15 @@ cmake --build build --config Release
 .\tagwise.exe "[path_to_images_folder]" "[path_to_tags.txt]" "[path_to_model]"
 ```
 
+If your model folder contains `tags.txt`, you can also run:
+```
+.\tagwise.exe "[path_to_images_folder]" "[path_to_model]"
+```
+
+If you see noisy ONNX schema registration logs on startup, `TAGWISE_VERBOSE_INIT=1` disables Tagwise's stderr silencing during ONNXRuntime initialization.
+
+If your image model has dynamic input size, Tagwise defaults to `224x224`; override with `TAGWISE_IMAGE_SIZE=224` or `TAGWISE_IMAGE_SIZE=336x336`.
+
 
 ## Demo
 
