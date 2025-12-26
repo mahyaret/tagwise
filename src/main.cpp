@@ -618,13 +618,17 @@ int main(int argc, char** argv) {
 
         size_t processed = 0, renamed = 0;
 
+        std::vector<fs::path> image_paths;
         for (const auto& entry : fs::directory_iterator(folder)) {
             if (!entry.is_regular_file()) continue;
             auto ext = entry.path().extension().string();
             for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
             if (ext != ".jpg" && ext != ".jpeg") continue;
+            image_paths.push_back(entry.path());
+        }
 
-            const fs::path img_path = entry.path();
+        for (const auto& img_path : image_paths) {
+            if (!fs::exists(img_path)) continue;
 
             // Load image
             cv::Mat bgr = cv::imread(img_path.string());
