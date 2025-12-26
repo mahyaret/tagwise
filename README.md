@@ -10,10 +10,24 @@ git clone https://huggingface.co/mahyaret/tagwise ./model
 
 ## Build on Windows
 
+Prerequisites:
+- Visual Studio 2022 (Desktop development with C++)
+- CMake
+- vcpkg
+
+Install dependencies with vcpkg:
+```
+git clone https://github.com/microsoft/vcpkg C:\vcpkg
+cd C:\vcpkg
+.\bootstrap-vcpkg.bat
+.\vcpkg.exe install opencv4 nlohmann-json onnxruntime --triplet x64-windows
+```
+
+Configure and build:
 ```
 cd C:\\Users\\home\\source\\repos\\tagwise
 
-cmake -B build -S . -G "Visual Studio 17 2022" -A x64
+cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DVCPKG_INSTALLED_DIR="C:/vcpkg/installed/x64-windows"
 cmake --build build --config Release
 ```
 

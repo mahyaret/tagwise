@@ -7,7 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ---- Windows (vcpkg) paths ----
 if(WIN32)
     # Change this one line if your vcpkg lives elsewhere:
-    set(VCPKG_INSTALLED_DIR "C:/Users/home/source/repos/vcpkg/installed/x64-windows")
+    set(VCPKG_INSTALLED_DIR "C:/Users/home/source/repos/vcpkg/installed/x64-windows"
+        CACHE PATH "vcpkg installed prefix (e.g. C:/path/to/vcpkg/installed/x64-windows)")
 
     # Help CMake find package configs (OpenCV, nlohmann_json, possibly onnxruntime)
     list(APPEND CMAKE_PREFIX_PATH
